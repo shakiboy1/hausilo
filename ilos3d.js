@@ -404,14 +404,14 @@ function frame(now) {
   wake();
 }
 function wake() { if (R && !R.raf) R.raf = requestAnimationFrame(frame); }
-// Making an ilo and its shaders takes a moment on a slow machine, so they are made one at a time between frames
+// Making an ilo and its shaders takes a moment on a slow machine, so they are made one at a time with a pause between them
 // (the shaders off the main thread where the browser can) and each ilo fades in when it is ready, so the page stays usable meanwhile.
 const sharpFor = canvas => canvas.clientWidth * Math.min(devicePixelRatio || 1, 2) >= 640;
 async function prepare() {
   if (R.busy) return; R.busy = true;
   try {
     for (let it; (it = R.items.find(i => !R.built[i.canvas.dataset.ilo]));) {
-      await new Promise(requestAnimationFrame);
+      await new Promise(done => setTimeout(done));               // a timer, not a frame, so a tab opened in the background gets its ilos ready too
       const name = it.canvas.dataset.ilo, made = build(name, sharpFor(it.canvas));
       if (R.renderer.extensions.has("KHR_parallel_shader_compile")) await R.renderer.compileAsync(made.scene, made.cam);
       R.built[name] = made; wake();
