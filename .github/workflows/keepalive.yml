@@ -1,0 +1,19 @@
+# Supabase pauses a free project after about a week with no visitors.
+# This asks the database one small question every day so it stays awake.
+name: Keep the database awake
+on:
+  schedule:
+    - cron: "17 9 * * *"
+  workflow_dispatch:
+permissions: {}
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ask the database how many deals are live
+        run: |
+          curl --fail --silent --show-error -o config.js "https://raw.githubusercontent.com/$GITHUB_REPOSITORY/$GITHUB_REF_NAME/config.js"
+          url=$(sed -n 's/.*supabaseUrl: *"\([^"]*\)".*/\1/p' config.js)
+          key=$(sed -n 's/.*supabaseKey: *"\([^"]*\)".*/\1/p' config.js)
+          if [ -z "$url" ] || [ -z "$key" ]; then echo "config.js is not filled in yet, so there is nothing to keep awake."; exit 0; fi
+          curl --fail --silent --show-error "$url/rest/v1/rpc/site_stats" -H "apikey: $key" -H "Authorization: Bearer $key"
