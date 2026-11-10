@@ -327,8 +327,10 @@ function setup() {
   renderer.setClearColor(0x000000, 0); renderer.toneMapping = THREE.NeutralToneMapping; renderer.toneMappingExposure = 1.02;
   renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.VSMShadowMap; renderer.setScissorTest(true);
   GLOW = GLOW || glowTex();
-  const env = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), .035).texture;
-  return { renderer, env, built: {}, items: [], raf: 0, t0: performance.now(), last: 0, still: false, at: 1.2, W: 0, H: 0, slow: 0, frozen: false, cost: 0, tick: 0, drew: 0, live: 0, every: 1,
+  // the room only has to light the robots, so its reflection map is made at a quarter of the usual width: on a weak graphics card that takes a fraction of the time
+  const room = new THREE.PMREMGenerator(renderer); room._setSize = function () { this._cubeSize = 64; };
+  const env = room.fromScene(new RoomEnvironment(), .035).texture;
+  return { renderer, env, built: {}, items: [], raf: 0, t0: performance.now(), last: 0, still: false, at: 1.2, W: 0, H: 0, slow: 0, frozen: false, cost: 0, tick: 0, drew: 0, live: 0, every: 1, busy: false,
     io: "IntersectionObserver" in window ? new IntersectionObserver(es => es.forEach(e => { const it = R.items.find(i => i.canvas === e.target); if (it) it.seen = e.isIntersecting; }), { rootMargin: "80px" }) : null };
 }
 // Parts that never move on their own are welded together, one piece per material in each moving group.
@@ -356,6 +358,7 @@ function build(name, sharp) {
   const rim = new THREE.DirectionalLight(0xcfe0ff, 1.5); rim.position.set(4.5, 3.2, -5);
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(14, 14), new THREE.ShadowMaterial({ opacity: .3 })); ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true;
   scene.add(key, rim, ground, ilo.group);
+  if (!ilo.group.getObjectByProperty("isPointLight", true)) scene.add(new THREE.PointLight(0xffffff, 0));   // one point light on every stage (only Lumi's lantern shines) lets all four share the same shaders
   const cam = new THREE.PerspectiveCamera(24, 3 / 4, .1, 60), mid = 1.36, dist = 3.3 / (2 * Math.tan(12 * Math.PI / 180));
   cam.position.set(0, mid + dist * .19, dist); cam.lookAt(0, mid, 0);
   return { ilo, scene, cam };
@@ -378,12 +381,14 @@ function draw(t, dt = 0) {
   for (const it of live) {
     if (!it.held && !R.still && (it.yaw || it.vel)) { it.vel += (-30 * it.yaw - 5.5 * it.vel) * Math.min(dt, .05); it.yaw += it.vel * Math.min(dt, .05); if (Math.abs(it.yaw) < .002 && Math.abs(it.vel) < .01) it.yaw = it.vel = 0; }
     if (it.held || it.vel) moving = true;
-    const { canvas, w, h } = it, s = R.built[canvas.dataset.ilo], tt = t + (+canvas.dataset.offset || 0), sig = `${w}x${h}@${it.yaw}@${tt}@${canvas.dataset.yaw || 0}`;
+    const { canvas, w, h } = it, s = R.built[canvas.dataset.ilo]; if (!s) continue;                             // still being made
+    const tt = t + (+canvas.dataset.offset || 0), sig = `${w}x${h}@${it.yaw}@${tt}@${canvas.dataset.yaw || 0}`;
     if (sig === it.sig || (++turn % every && it.sig && !it.held && !it.yaw)) continue; it.sig = sig; R.drew++;
     if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
     s.cam.aspect = w / h; s.cam.updateProjectionMatrix(); s.ilo.group.rotation.y = it.yaw + (+canvas.dataset.yaw || 0); s.ilo.update(tt);
     R.renderer.setViewport(0, 0, w, h); R.renderer.setScissor(0, 0, w, h); R.renderer.render(s.scene, s.cam);
     it.ctx.clearRect(0, 0, w, h); it.ctx.drawImage(R.renderer.domElement, 0, R.H - h, w, h, 0, 0, w, h);
+    if (canvas.style.opacity === "0") canvas.style.opacity = 1;
   }
   return moving;
 }
@@ -399,16 +404,34 @@ function frame(now) {
   wake();
 }
 function wake() { if (R && !R.raf) R.raf = requestAnimationFrame(frame); }
+// Making an ilo and its shaders takes a moment on a slow machine, so they are made one at a time between frames
+// (the shaders off the main thread where the browser can) and each ilo fades in when it is ready, so the page stays usable meanwhile.
+const sharpFor = canvas => canvas.clientWidth * Math.min(devicePixelRatio || 1, 2) >= 640;
+async function prepare() {
+  if (R.busy) return; R.busy = true;
+  try {
+    for (let it; (it = R.items.find(i => !R.built[i.canvas.dataset.ilo]));) {
+      await new Promise(requestAnimationFrame);
+      const name = it.canvas.dataset.ilo, made = build(name, sharpFor(it.canvas));
+      if (R.renderer.extensions.has("KHR_parallel_shader_compile")) await R.renderer.compileAsync(made.scene, made.cam);
+      R.built[name] = made; wake();
+    }
+  } catch (e) { document.documentElement.classList.add("no3d"); }   // the page then shows its flat symbols instead
+  R.busy = false;
+}
 
 export function mountIlos(root = document, opts = {}) {
   const fresh = [...root.querySelectorAll("canvas[data-ilo]")].filter(c => BUILD[c.dataset.ilo] && !c.__ilo);
   if (!R) { if (!fresh.length) return null; R = setup(); }
   R.still = opts.still ?? (R.frozen || matchMedia("(prefers-reduced-motion: reduce)").matches); if (opts.at != null) R.at = opts.at;
+  const atOnce = opts.manual || opts.still === true;            // tools that ask for a still picture get it straight away
   for (const canvas of fresh) {
-    const name = canvas.dataset.ilo; R.built[name] ||= build(name, canvas.clientWidth * Math.min(devicePixelRatio || 1, 2) >= 640);
+    const name = canvas.dataset.ilo; if (atOnce) R.built[name] ||= build(name, sharpFor(canvas));
     const it = { canvas, ctx: canvas.getContext("2d"), seen: true, yaw: 0, vel: 0, held: false, sig: "" };
     canvas.__ilo = true; R.items.push(it); if (R.io) R.io.observe(canvas); grab(it);
+    if (!R.built[name]) { canvas.style.opacity = 0; canvas.style.transition = "opacity .6s"; }
   }
+  if (!atOnce) prepare();
   draw(R.still ? R.at : (performance.now() - R.t0) / 1000); if (!opts.manual) wake();
   return { draw: t => { R.items.forEach(it => { it.sig = ""; }); draw(t); }, stop: () => { cancelAnimationFrame(R.raf); R.raf = 0; }, renderer: R.renderer };
 }
