@@ -114,8 +114,8 @@ function lumi() {
   b.add(mesh(lathe(prof, 120), glass, { cast: false, recv: false }));
   const coreLit = lit(0xFFF4D4, 3.2), core = mesh(lathe([[0, 0], [.075, .03], [.105, .11], [.09, .21], [.05, .31], [.014, .39], [0, .41]], 40), coreLit, { p: [0, .55, 0], cast: false, recv: false }); b.add(core);
   const haze = mesh(new THREE.CylinderGeometry(.4, .4, .9, 48, 1, true), new THREE.MeshBasicMaterial({ color: 0xFFD27A, transparent: true, opacity: .15, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }), { p: [0, .745, 0], cast: false, recv: false }); b.add(haze);
-  const flare = glow(0xFFDFA0, 2.7, .85); flare.position.set(0, .745, 0); b.add(flare);
-  const halo = glow(0xFFC560, 4.4, .3); halo.position.set(0, .745, -.2); b.add(halo);
+  const flare = glow(0xFFDFA0, 2.2, .85); flare.position.set(0, .745, 0); b.add(flare);
+  const halo = glow(0xFFC560, 2.4, .3); halo.position.set(0, .745, -.2); b.add(halo);
   b.add(mesh(new THREE.CylinderGeometry(.05, .07, .28, 20), steel, { p: [0, .41, 0], cast: false }));
   const motes = []; for (let i = 0; i < 9; i++) { const m = glow(0xFFE6B0, .07, .9); m.userData = { a: i * 2.4, r: .12 + (i * .37 % .22), s: .12 + (i * .13 % .1), o: i / 9 }; b.add(m); motes.push(m); }
   b.add(mesh(lathe([[.47, 1.22], [.51, 1.22], [.555, 1.24], [.575, 1.29], [.555, 1.335], [.46, 1.39], [.31, 1.47], [.15, 1.525], [.07, 1.535], [.07, 1.6], [.1, 1.61], [.1, 1.64], [0, 1.645]]), teal));
@@ -123,12 +123,12 @@ function lumi() {
   for (const s of [1, -1]) b.add(mesh(new THREE.CylinderGeometry(.04, .04, .05, 16), steel, { p: [s * .575, 1.29, 0], r: [0, 0, Math.PI / 2] }));
   const handle = mesh(new THREE.TorusGeometry(.575, .022, 12, 72, Math.PI), steel, { p: [0, 1.29, 0] }); b.add(handle);
   const under = mesh(new THREE.TorusGeometry(.17, .014, 10, 48), lit(0xFFD98F, 2.2), { p: [0, -.06, 0], r: [Math.PI / 2, 0, 0], cast: false }); b.add(under);
-  const pool = mesh(new THREE.PlaneGeometry(3, 3), new THREE.MeshBasicMaterial({ map: GLOW, color: 0xFFC560, transparent: true, opacity: .5, blending: THREE.AdditiveBlending, depthWrite: false }), { p: [0, .004, 0], r: [-Math.PI / 2, 0, 0], cast: false, recv: false });
+  const pool = mesh(new THREE.PlaneGeometry(2, 2), new THREE.MeshBasicMaterial({ map: GLOW, color: 0xFFC560, transparent: true, opacity: .5, blending: THREE.AdditiveBlending, depthWrite: false }), { p: [0, .004, 0], r: [-Math.PI / 2, 0, 0], cast: false, recv: false });
   g.add(pool);
   return { group: g, height: 2.75, update(t) {
     const bob = Math.sin(t * 1.35); b.position.y = .6 + .07 * bob; b.rotation.z = .035 * Math.sin(t * .8); b.rotation.y = .12 * Math.sin(t * .5);
     const p = .5 + .5 * Math.sin(t * 2.6), q = .82 + .18 * p;
-    coreLit.color.set(0xFFF4D4).multiplyScalar(2.6 + 1.2 * p); core.scale.set(.95 + .12 * Math.sin(t * 9.1) * Math.sin(t * 2.3), .96 + .1 * p + .04 * Math.sin(t * 13.7), .95 + .12 * Math.cos(t * 7.7) * Math.sin(t * 3.1)); flare.material.opacity = .65 + .3 * p; flare.scale.setScalar(2.5 + .45 * p);
+    coreLit.color.set(0xFFF4D4).multiplyScalar(2.6 + 1.2 * p); core.scale.set(.95 + .12 * Math.sin(t * 9.1) * Math.sin(t * 2.3), .96 + .1 * p + .04 * Math.sin(t * 13.7), .95 + .12 * Math.cos(t * 7.7) * Math.sin(t * 3.1)); flare.material.opacity = .65 + .3 * p; flare.scale.setScalar(2.05 + .3 * p);
     halo.material.opacity = .2 + .14 * p; haze.material.opacity = .11 + .07 * p; pool.material.opacity = (.34 + .16 * p) * (1 - .25 * bob); pool.scale.setScalar(1 - .08 * bob);
     handle.rotation.x = -.1 * Math.sin(t * 1.35 - .6);
     for (const m of motes) { const u = (t * m.userData.s + m.userData.o) % 1, a = m.userData.a + t * .5; m.position.set(Math.cos(a) * m.userData.r, .34 + u * .8, Math.sin(a) * m.userData.r); m.material.opacity = Math.sin(u * Math.PI) * .9 * q; }
