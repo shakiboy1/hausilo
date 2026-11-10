@@ -5,6 +5,7 @@
 import * as THREE from "three";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
+import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 
 const TAU = Math.PI * 2, clamp = (x, a, b) => Math.min(b, Math.max(a, x));
 const ease = x => { x = clamp(x, 0, 1); return x * x * (3 - 2 * x); };
@@ -12,7 +13,7 @@ const ease = x => { x = clamp(x, 0, 1); return x * x * (3 - 2 * x); };
 const lathe = (pts, seg = 96, from = 0, len = TAU) => new THREE.LatheGeometry((pts[0][1] > pts[pts.length - 1][1] ? [...pts].reverse() : pts).map(p => new THREE.Vector2(p[0], p[1])), seg, from, len);
 const mesh = (geo, mat, o = {}) => {
   const m = new THREE.Mesh(geo, mat); m.castShadow = o.cast !== false; m.receiveShadow = o.recv !== false;
-  if (o.p) m.position.set(...o.p); if (o.r) m.rotation.set(...o.r); return m;
+  if (o.p) m.position.set(...o.p); if (o.r) m.rotation.set(...o.r); if (o.live) m.userData.live = true; return m;   // live: this part moves on its own every frame
 };
 const lit = (color, k = 1) => new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(k), toneMapped: false });
 let GLOW;
@@ -100,7 +101,7 @@ function hilo() {
     thigh.add(mesh(rbox(.19, L1 + .1, .23, .08), dark, { p: [0, L1 / 2, 0] }), mesh(rbox(.2, L1 - .04, .25, .09), gold, { p: [s * .03, L1 / 2 + .01, .012] }));
     shin.add(mesh(cyl(.05, .062, L2, 16).translate(0, L2 / 2, 0), dark), mesh(rbox(.14, .36, .07, .03), gold, { p: [0, L2 * .5, .062] }));
     kn.add(mesh(cyl(.09, .09, .22, 28), dark, { r: Z90 }), mesh(new THREE.TorusGeometry(.062, .011, 8, 36), trim, { p: [s * .113, 0, 0], r: [0, Math.PI / 2, 0], cast: false, recv: false }));
-    const rod = mesh(cyl(.016, .016, 1, 10).translate(0, .5, 0), metal), sleeve = mesh(cyl(.028, .028, 1, 12).translate(0, .5, 0), dark); bot.add(rod, sleeve);
+    const rod = mesh(cyl(.016, .016, 1, 10).translate(0, .5, 0), metal, { live: true }), sleeve = mesh(cyl(.028, .028, 1, 12).translate(0, .5, 0), dark, { live: true }); bot.add(rod, sleeve);
     return { x, s, hock, thigh, shin, kn, rod, sleeve };
   });
   const floorGlow = mesh(new THREE.PlaneGeometry(1.8, 1.8), new THREE.MeshBasicMaterial({ map: GLOW, color: 0xFFA826, transparent: true, opacity: .2, blending: THREE.AdditiveBlending, depthWrite: false }), { p: [0, .004, 0], r: [-Math.PI / 2, 0, 0], cast: false, recv: false });
@@ -170,7 +171,7 @@ function lumi() {
   const flare = glow(0xFFDFA0, 1.25, .6); flare.position.set(0, -.22, 0); lamp.add(flare);
   const shine = new THREE.PointLight(0xFFC873, 0, 3.4, 1.7); shine.position.set(0, -.22, .12); lamp.add(shine);      // the lantern really lights the bird from below
   const motes = []; for (let i = 0; i < 6; i++) { const m = glow(0xFFE6B0, .05, 0); m.userData = { a: i * 2.4, r: .03 + (i * .37 % .1), s: .2 + (i * .13 % .1), o: i / 6 }; bot.add(m); motes.push(m); }
-  const pool = mesh(new THREE.PlaneGeometry(1.5, 1.5), new THREE.MeshBasicMaterial({ map: GLOW, color: 0xFFC560, transparent: true, opacity: .3, blending: THREE.AdditiveBlending, depthWrite: false }), { p: [0, .004, 0], r: [-Math.PI / 2, 0, 0], cast: false, recv: false });
+  const pool = mesh(new THREE.PlaneGeometry(1.5, 1.5), new THREE.MeshBasicMaterial({ map: GLOW, color: 0xFFC560, transparent: true, opacity: .3, blending: THREE.AdditiveBlending, depthWrite: false }), { p: [0, .004, 0], r: [-Math.PI / 2, 0, 0], cast: false, recv: false, live: true });
   g.add(pool);
   const Pd = 6.4, Tf = 1.3, at = new THREE.Vector3();
   return { group: g, height: 2.8, update(t) {
@@ -327,11 +328,29 @@ function setup() {
   renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.VSMShadowMap; renderer.setScissorTest(true);
   GLOW = GLOW || glowTex();
   const env = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), .035).texture;
-  return { renderer, env, built: {}, items: [], raf: 0, t0: performance.now(), last: 0, still: false, at: 1.2, W: 0, H: 0, slow: 0, frozen: false,
+  return { renderer, env, built: {}, items: [], raf: 0, t0: performance.now(), last: 0, still: false, at: 1.2, W: 0, H: 0, slow: 0, frozen: false, cost: 0, tick: 0, drew: 0, live: 0, every: 1,
     io: "IntersectionObserver" in window ? new IntersectionObserver(es => es.forEach(e => { const it = R.items.find(i => i.canvas === e.target); if (it) it.seen = e.isIntersecting; }), { rootMargin: "80px" }) : null };
 }
+// Parts that never move on their own are welded together, one piece per material in each moving group.
+// The picture is the same and there is about a third less to draw, which helps weak laptops keep up.
+function weld(root) {
+  const groups = []; root.traverse(o => { if (!o.isMesh && !o.isSprite && !o.isLight) groups.push(o); });
+  for (const g of groups) {
+    const sets = new Map();
+    for (const m of g.children) {
+      if (!m.isMesh || m.userData.live || m.children.length || m.material.transparent) continue;
+      const key = m.material.uuid + (m.castShadow ? "c" : "-") + (m.receiveShadow ? "r" : "-"); sets.has(key) ? sets.get(key).push(m) : sets.set(key, [m]);
+    }
+    for (const list of sets.values()) {
+      if (list.length < 2) continue;
+      const one = mergeGeometries(list.map(m => { m.updateMatrix(); const q = m.geometry.index ? m.geometry.toNonIndexed() : m.geometry.clone(); for (const k of Object.keys(q.attributes)) if (k !== "position" && k !== "normal") q.deleteAttribute(k); return q.applyMatrix4(m.matrix); }));
+      if (!one) continue;
+      g.remove(...list); g.add(mesh(one, list[0].material, { cast: list[0].castShadow, recv: list[0].receiveShadow }));
+    }
+  }
+}
 function build(name, sharp) {
-  const ilo = BUILD[name](), scene = new THREE.Scene(); scene.environment = R.env; scene.environmentIntensity = .85;
+  const ilo = BUILD[name](), scene = new THREE.Scene(); scene.environment = R.env; scene.environmentIntensity = .85; weld(ilo.group);
   const key = new THREE.DirectionalLight(0xffffff, 2.4); key.position.set(-1.5, 9, 4.2); key.castShadow = true; key.shadow.mapSize.setScalar(sharp ? 1024 : 512);
   Object.assign(key.shadow.camera, { left: -2.4, right: 2.4, top: 2.6, bottom: -2.6, near: 1, far: 22 }); key.shadow.radius = 5; key.shadow.blurSamples = 14; key.shadow.bias = -.0005; key.shadow.normalBias = .03;
   const rim = new THREE.DirectionalLight(0xcfe0ff, 1.5); rim.position.set(4.5, 3.2, -5);
@@ -354,12 +373,13 @@ function draw(t, dt = 0) {
   for (const it of live) { it.w = Math.max(2, Math.round(it.canvas.clientWidth * dpr)); it.h = Math.max(2, Math.round(it.canvas.clientHeight * dpr)); }
   const W = Math.max(R.W, ...live.map(it => it.w)), H = Math.max(R.H, ...live.map(it => it.h));
   if (W !== R.W || H !== R.H) { R.W = W; R.H = H; R.renderer.setSize(W, H, false); }
-  let moving = false;
+  // a machine that struggles draws half (or a quarter) of the stages on each frame; every ilo still moves by the clock, so none of them slows down
+  const every = R.every = R.still ? 1 : R.cost > (R.every > 2 ? 34 : 44) ? 4 : R.cost > (R.every > 1 ? 10 : 15) ? 2 : 1; let moving = false, turn = R.tick; R.drew = 0; R.live = live.length;
   for (const it of live) {
     if (!it.held && !R.still && (it.yaw || it.vel)) { it.vel += (-30 * it.yaw - 5.5 * it.vel) * Math.min(dt, .05); it.yaw += it.vel * Math.min(dt, .05); if (Math.abs(it.yaw) < .002 && Math.abs(it.vel) < .01) it.yaw = it.vel = 0; }
     if (it.held || it.vel) moving = true;
     const { canvas, w, h } = it, s = R.built[canvas.dataset.ilo], tt = t + (+canvas.dataset.offset || 0), sig = `${w}x${h}@${it.yaw}@${tt}@${canvas.dataset.yaw || 0}`;
-    if (sig === it.sig) continue; it.sig = sig;
+    if (sig === it.sig || (++turn % every && it.sig && !it.held && !it.yaw)) continue; it.sig = sig; R.drew++;
     if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
     s.cam.aspect = w / h; s.cam.updateProjectionMatrix(); s.ilo.group.rotation.y = it.yaw + (+canvas.dataset.yaw || 0); s.ilo.update(tt);
     R.renderer.setViewport(0, 0, w, h); R.renderer.setScissor(0, 0, w, h); R.renderer.render(s.scene, s.cam);
@@ -372,9 +392,10 @@ function frame(now) {
   if (!R.items.length) return;                                  // nothing on the page: stop until mountIlos() is called again
   const dt = (now - R.last) / 1000;
   if (dt < .012) return wake();                                 // cap at about 60 frames a second
-  R.last = now; const t = (now - R.t0) / 1000, began = performance.now(); draw(R.still ? R.at : t, dt);
+  R.last = now; R.tick++; const t = (now - R.t0) / 1000, began = performance.now(); draw(R.still ? R.at : t, dt);
   // a device that cannot keep up (no graphics card) gets a still picture instead of a page that stutters
-  if (!R.still) { R.slow = performance.now() - began > 45 ? R.slow + 1 : 0; if (R.slow >= 6) { R.frozen = R.still = true; R.at = t; } }
+  const took = performance.now() - began; if (R.drew) R.cost += (took * R.live / R.drew - R.cost) * .2;   // what a frame with every stage on it would cost
+  if (!R.still) { R.slow = took > 45 ? R.slow + 1 : 0; if (R.slow >= 6) { R.frozen = R.still = true; R.at = t; } }
   wake();
 }
 function wake() { if (R && !R.raf) R.raf = requestAnimationFrame(frame); }
@@ -384,7 +405,7 @@ export function mountIlos(root = document, opts = {}) {
   if (!R) { if (!fresh.length) return null; R = setup(); }
   R.still = opts.still ?? (R.frozen || matchMedia("(prefers-reduced-motion: reduce)").matches); if (opts.at != null) R.at = opts.at;
   for (const canvas of fresh) {
-    const name = canvas.dataset.ilo; R.built[name] ||= build(name, canvas.clientWidth * Math.min(devicePixelRatio || 1, 2) >= 420);
+    const name = canvas.dataset.ilo; R.built[name] ||= build(name, canvas.clientWidth * Math.min(devicePixelRatio || 1, 2) >= 640);
     const it = { canvas, ctx: canvas.getContext("2d"), seen: true, yaw: 0, vel: 0, held: false, sig: "" };
     canvas.__ilo = true; R.items.push(it); if (R.io) R.io.observe(canvas); grab(it);
   }
